@@ -14,7 +14,7 @@ pip install -r requirements.txt
 
 # 3. (可选) 配置 AI 助理
 cp .env.example .env
-# 编辑 .env，填入你的 Anthropic API Key
+# 编辑 .env，填入你的 DeepSeek API Key
 
 # 4. 启动应用（自动初始化数据库 + 预置示例数据）
 python app.py
@@ -32,7 +32,9 @@ python app.py
 | **作业追踪** | 按课程筛选、优先级标记、临近截止高亮、一键完成 |
 | **复习计划** | 按课程分组、三态进度（未开始/进行中/已完成）、每日任务提示、导出 PDF |
 | **学习笔记** | Markdown 编辑 + 实时预览、标签系统、全文搜索 |
-| **Time Log** | 按课程记录每日学习时长、本周汇总、Dashboard 柱状图（Chart.js） |
+| **学习计时器** | 自定义科目与时长，倒计时界面，结束后自动记录学习时长 |
+| **背景音乐** | 上传本地音乐（mp3/wav/ogg），计时时播放，支持音量与循环控制 |
+| **学习统计** | 今日 / 本周 / 本月时长可视化，集成在计时器页面 |
 | **AI 助理** | 右下角悬浮聊天窗，Markdown 渲染，解答问题 + 复习建议 |
 
 ## 配置 AI 助理
@@ -47,28 +49,32 @@ python app.py
 
 | 快捷键 | 功能 |
 |--------|------|
-| `Ctrl+1` ~ `Ctrl+5` | 切换 Tab（Dashboard / 作业 / 复习 / 笔记 / Time Log） |
+| `Ctrl+1` ~ `Ctrl+6` | 切换 Tab（Dashboard / Courses / 作业 / 复习 / 笔记 / 计时器） |
 | `Esc` | 关闭弹窗 |
 
 ## 技术栈
 
 - **后端**: Python + Flask
 - **数据库**: SQLite（数据存储在 `study_tracker.db`）
-- **前端**: 原生 HTML/CSS/JS + Chart.js + marked.js（CDN 引入）
-- **PDF**: WeasyPrint
-- **AI**: Anthropic Claude API
+- **前端**: 原生 HTML/CSS/JS + Chart.js + SortableJS + marked.js（CDN 引入）
+- **PDF**: WeasyPrint · PyMuPDF（PDF 文字提取）
+- **音频**: mutagen（读取上传音乐的时长）
+- **AI**: DeepSeek API（deepseek-chat）
 
 ## 文件结构
 
 ```
 study-tracker/
 ├── app.py              # Flask 主程序 + API 路由
-├── database.py         # SQLite 数据库操作 + 种子数据
+├── database.py         # 数据库初始化与操作
 ├── requirements.txt    # Python 依赖
 ├── .env.example        # 环境变量模板
 ├── static/
 │   ├── style.css       # 样式表
-│   └── app.js          # 前端逻辑
+│   ├── app.js          # 前端逻辑
+│   └── uploads/
+│       ├── pdfs/       # 用户上传的 PDF 附件
+│       └── music/      # 用户上传的背景音乐
 ├── templates/
 │   └── index.html      # 页面模板
 └── README.md
