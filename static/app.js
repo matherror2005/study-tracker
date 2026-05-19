@@ -39,18 +39,18 @@ function priorityLabel(p) {
 }
 
 function priorityBadge(p) {
-    const cls = { "高": "badge-high", "中": "badge-mid", "低": "badge-low" }[p] || "badge-mid";
-    return `<span class="badge ${cls}">${p}</span>`;
+    const colors = { "高": "#dc2626", "中": "#d97706", "低": "#16a34a" };
+    return `<span class="pill" style="background:${colors[p] || '#999'}">${p}</span>`;
 }
 
 function statusBadge(s) {
-    const map = {
-        completed: ["已完成", "badge-done"],
-        in_progress: ["进行中", "badge-progress"],
-        not_started: ["未开始", "badge-pending"],
+    const colors = {
+        completed: ["已完成", "#16a34a"],
+        in_progress: ["进行中", "#d97706"],
+        not_started: ["未开始", "#999"],
     };
-    const [label, cls] = map[s] || [s, ""];
-    return `<span class="badge badge-status ${cls}">${label}</span>`;
+    const [label, color] = colors[s] || [s, "#999"];
+    return `<span class="pill" style="background:${color}">${label}</span>`;
 }
 
 // 简单 Markdown → HTML（支持标题/列表/粗体/斜体/代码/表格/引用）
@@ -161,8 +161,9 @@ function updateTopbar() {
             }
         } else {
             $("#topbarCountdown").textContent = "暂无考试";
-            $("#topbarCountdown").style.background = "#f8fafc";
-            $("#topbarCountdown").style.color = "#94a3b8";
+            $("#topbarCountdown").style.background = "transparent";
+            $("#topbarCountdown").style.color = "var(--c-muted)";
+            $("#topbarCountdown").style.border = "none";
         }
     });
 }
@@ -180,10 +181,10 @@ function switchTab(tab) {
     // 渲染对应内容
     switch (tab) {
         case "dashboard": renderDashboard(); break;
+        case "courses": renderCourses(); break;
         case "assignments": renderAssignments(); break;
         case "review": renderReview(); break;
         case "notes": renderNotes(); break;
-        case "timelog": renderTimelog(); break;
         case "timer": renderTimer(); break;
     }
 }
@@ -209,34 +210,23 @@ async function renderDashboard() {
     const data = await api("/api/dashboard");
     const main = $("#mainContent");
 
-    let countdownHTML = "";
-    if (data.nearest_exam) {
-        const days = data.days_until_exam;
-        countdownHTML = `
-        <div class="countdown-banner">
-            <div>
-                <div class="countdown-label">距离最近考试</div>
-                <div style="display:flex;align-items:baseline;gap:4px;">
-                    <span class="countdown-number">${days}</span>
-                    <span class="countdown-unit">天</span>
-                </div>
-                <div class="countdown-exam-name">${data.nearest_exam.name} · ${data.nearest_exam.exam_date}</div>
-            </div>
-            <div class="countdown-score">
-                <div class="score-number">${data.overall_score}</div>
-                <div class="score-label">综合学习评分 / 100</div>
-            </div>
-        </div>`;
-    } else {
-        countdownHTML = `<div class="card empty-state"><div class="empty-state-icon">📅</div><div class="empty-state-text">还没有添加课程，请先添加课程和考试日期</div></div>`;
-    }
+    // Metric: exam countdown
+    const examDays = data.days_until_exam;
+    const examName = data.nearest_exam ? data.nearest_exam.name : "";
+    const examDate = data.nearest_exam ? data.nearest_exam.exam_date : "";
 
-    // 课程进度
+    // Metric: pending assignments
+    const pendingCount = data.week_assignments.total - data.week_assignments.done;
+
+    // Metric: streak (from data or compute simply)
+    const streakDays = data.streak_days || 0;
+
+    // Course progress
     let progressHTML = data.course_progress.map(c => {
         const daysToExam = Math.ceil((new Date(c.exam_date + "T00:00:00") - new Date()) / 86400000);
         const dailyHint = c.total_tasks > c.completed_tasks && daysToExam > 0
-            ? `每天约需完成 ${Math.ceil((c.total_tasks - c.completed_tasks) / daysToExam)} 个任务`
-            : (c.progress_pct === 100 ? "🎉 全部完成！" : "");
+            ? `每天约 ${Math.ceil((c.total_tasks - c.completed_tasks) / daysToExam)} 个任务`
+            : (c.progress_pct === 100 ? "全部完成" : "");
         return `
         <div class="progress-item">
             <div class="progress-item-header">
@@ -246,136 +236,99 @@ async function renderDashboard() {
             <div class="progress-bar">
                 <div class="progress-bar-fill" style="width:${c.progress_pct}%;background:${c.color}"></div>
             </div>
-            <div class="progress-item-exam">${c.completed_tasks}/${c.total_tasks} 章节 · ${dailyHint}</div>
+            <div class="progress-item-sub">${c.completed_tasks}/${c.total_tasks} 章节 · ${dailyHint}</div>
         </div>`;
     }).join("");
 
-    // 本周作业环形图
-    const weekPct = data.week_assignments.total > 0
-        ? Math.round(data.week_assignments.done / data.week_assignments.total * 100) : 100;
-    const ringHTML = `
-    <div class="ring-chart">
-        <svg viewBox="0 0 36 36">
-            <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                  fill="none" stroke="#e2e8f0" stroke-width="3"/>
-            <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831"
-                  fill="none" stroke="#10b981" stroke-width="3"
-                  stroke-dasharray="${weekPct}, 100"/>
-        </svg>
-        <div class="ring-chart-info">
-            <div class="ring-chart-pct">${weekPct}%</div>
-            <div class="ring-chart-label">本周作业完成率<br>${data.week_assignments.done}/${data.week_assignments.total} 项</div>
-        </div>
-    </div>`;
-
-    // 今日待办
-    let todoHTML = "";
+    // Today todos
     const todos = [
         ...data.today_todos.assignments.map(a => ({ ...a, type: "assignment" })),
         ...data.today_todos.review_tasks.map(r => ({ ...r, type: "review" })),
     ];
+    let todoHTML = "";
     if (todos.length === 0) {
         todoHTML = `<div class="empty-state"><div class="empty-state-icon">✨</div><div class="empty-state-text">今天没有待办事项</div></div>`;
     } else {
-        todoHTML = todos.slice(0, 8).map(t => {
-            const icon = t.type === "assignment" ? "📝" : "📖";
-            const label = t.type === "assignment" ? "作业" : "复习";
-            const badge = t.type === "assignment" ? priorityBadge(t.priority) : statusBadge(t.status);
-            return `
-            <div class="assignment-item">
-                <span style="font-size:18px">${icon}</span>
-                <div class="assignment-info">
-                    <div class="assignment-title">${t.title}</div>
-                    <div class="assignment-meta">${label} · ${t.course_name}</div>
-                </div>
-                ${badge}
-            </div>`;
-        }).join("");
+        todoHTML = todos.slice(0, 8).map(t => `
+            <div class="todo-item ${t.completed ? 'todo-done' : ''}">
+                <div class="todo-check ${t.completed ? 'done' : ''}"
+                     onclick="${t.type === 'assignment' ? `toggleAssignment(${t.id})` : `cycleReviewStatus(${t.id},'${t.status||'not_started'}')`}"></div>
+                <span class="todo-text">${t.title}</span>
+                <span class="pill" style="background:${t.course_color || '#999'}">${t.course_name}</span>
+            </div>`).join("");
     }
 
-    // 本周作业列表
-    let weekAssignHTML = "";
-    if (data.week_assignments.list.length === 0) {
-        weekAssignHTML = `<div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-text">本周暂无作业</div></div>`;
-    } else {
-        weekAssignHTML = data.week_assignments.list.map(a => {
-            const isUrgent = !a.completed && (new Date(a.due_date + "T00:00:00") - new Date()) / 86400000 <= 3 && (new Date(a.due_date + "T00:00:00") - new Date()) / 86400000 >= 0;
-            return `
-            <div class="assignment-item ${a.completed ? 'completed' : ''} ${isUrgent ? 'urgent' : ''}">
-                <div class="assignment-check" onclick="toggleAssignment(${a.id})"></div>
-                <div class="assignment-info">
-                    <div class="assignment-title">${a.title}</div>
-                    <div class="assignment-meta">${a.course_name} · ${formatDate(a.due_date)}</div>
-                </div>
-                ${priorityBadge(a.priority)}
-            </div>`;
-        }).join("");
-    }
+    main.innerHTML = `
+    <div class="page-header">
+        <h1 class="page-title">Dashboard</h1>
+        <p class="page-subtitle">学习概览 · ${new Date().getFullYear()}年${new Date().getMonth()+1}月${new Date().getDate()}日</p>
+    </div>
+    <div class="metrics-row">
+        <div class="metric-card">
+            <div class="metric-label">距离考试</div>
+            <div class="metric-value">${examDays !== null && examDays !== undefined ? examDays : '—'}<span style="font-size:16px;font-weight:400;color:var(--c-muted)"> 天</span></div>
+            <div class="metric-sub">${examName ? examName + ' · ' + examDate : '暂无考试'}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">待完成作业</div>
+            <div class="metric-value">${pendingCount}<span style="font-size:16px;font-weight:400;color:var(--c-muted)"> 项</span></div>
+            <div class="metric-sub">本周共 ${data.week_assignments.total} 项</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">学习连续天数</div>
+            <div class="metric-value">${streakDays}<span style="font-size:16px;font-weight:400;color:var(--c-muted)"> 天</span></div>
+            <div class="metric-sub">综合评分 ${data.overall_score}/100</div>
+        </div>
+    </div>
+    <div class="dashboard-columns">
+        <div class="card">
+            <div class="card-title" style="margin-bottom:16px">课程进度</div>
+            <div class="progress-list">${progressHTML || '<div class="empty-state"><div class="empty-state-text">暂无课程</div></div>'}</div>
+        </div>
+        <div class="card">
+            <div class="card-title" style="margin-bottom:16px">今日待办</div>
+            <div class="todo-list">${todoHTML}</div>
+        </div>
+    </div>`;
+}
 
-    // 课程管理卡片
-    const courseCardsHTML = STATE.courses.length === 0
-        ? `<div class="empty-state"><div class="empty-state-icon">📚</div><div class="empty-state-text">还没有添加课程</div></div>`
-        : STATE.courses.map(c => {
+// Placeholder for streak (can be enhanced with actual data)
+// Using a simple approach: check how many consecutive past days have time logs
+
+// ═══════════════════════════════════════════
+//  Courses page
+// ═══════════════════════════════════════════
+
+async function renderCourses() {
+    const main = $("#mainContent");
+    const courses = STATE.courses;
+
+    const gridHTML = courses.length === 0
+        ? `<div class="empty-state"><div class="empty-state-icon">📚</div><div class="empty-state-text">还没有课程，点击右上角添加</div></div>`
+        : courses.map(c => {
             const daysToExam = Math.ceil((new Date(c.exam_date + "T00:00:00") - new Date()) / 86400000);
             return `
             <div class="course-card">
                 <div class="course-card-accent" style="background:${c.color}"></div>
                 <div class="course-card-name">${c.name}</div>
-                <div class="course-card-exam">📅 考试: ${c.exam_date} · ${daysToExam > 0 ? daysToExam + '天后' : '已过期'}</div>
+                <div class="course-card-exam">考试: ${c.exam_date} · ${daysToExam > 0 ? '还有 ' + daysToExam + ' 天' : (daysToExam === 0 ? '今天' : '已过期')}</div>
                 <div class="course-card-actions">
-                    <button class="btn btn-xs btn-secondary" onclick="showEditCourseModal(${c.id})">✏️ 编辑</button>
-                    <button class="btn btn-xs" style="background:${c.color}15;color:${c.color}" onclick="switchTab('assignments');renderAssignments(${c.id})">📝 作业</button>
-                    <button class="btn btn-xs" style="background:${c.color}15;color:${c.color}" onclick="switchTab('review')">📖 复习</button>
+                    <button class="btn btn-ghost btn-xs" onclick="showEditCourseModal(${c.id})">编辑</button>
+                    <button class="btn btn-ghost btn-xs" onclick="switchTab('assignments');renderAssignments(${c.id})">查看作业</button>
+                    <button class="btn btn-xs btn-danger" onclick="deleteCourse(${c.id})">删除</button>
                 </div>
             </div>`;
         }).join("");
 
     main.innerHTML = `
-    <div class="dashboard-grid">
-        <div>${countdownHTML}</div>
-
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">📚 课程管理</div>
-                <button class="btn btn-primary btn-sm" onclick="showAddCourseModal()">+ 添加课程</button>
-            </div>
-            <div class="course-grid">${courseCardsHTML}</div>
-        </div>
-
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">📊 复习进度</div>
-                <button class="btn btn-sm btn-secondary" onclick="switchTab('review')">查看详情 →</button>
-            </div>
-            <div class="progress-list">${progressHTML}</div>
-        </div>
-
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">📋 本周作业</div>
-            </div>
-            ${ringHTML}
-            <div class="assignment-list" style="margin-top:12px">${weekAssignHTML}</div>
-        </div>
-
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">📌 今日待办</div>
-            </div>
-            <div class="assignment-list">${todoHTML}</div>
-        </div>
-
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">⏱️ 本周学习时长</div>
-                <span style="font-size:13px;color:var(--text-muted)">${data.weekly_hours} 小时</span>
-            </div>
-            <div class="time-log-chart"><canvas id="weeklyTimeChart"></canvas></div>
-        </div>
-    </div>`;
-
-    // 初始化本周时间柱状图
-    initWeeklyChart();
+    <div class="page-header">
+        <h1 class="page-title">Courses</h1>
+        <p class="page-subtitle">${courses.length} 门课程</p>
+    </div>
+    <div style="margin-bottom:16px;display:flex;justify-content:flex-end">
+        <button class="btn btn-primary" onclick="showAddCourseModal()">+ 添加课程</button>
+    </div>
+    <div class="course-grid">${gridHTML}</div>`;
 }
 
 async function initWeeklyChart() {
@@ -447,29 +400,39 @@ async function renderAssignments(filterCourseId = null) {
     const listHTML = filtered.length === 0
         ? `<div class="empty-state"><div class="empty-state-icon">📝</div><div class="empty-state-text">暂无作业，点击右上角添加</div></div>`
         : filtered.map(a => {
-            const isUrgent = !a.completed && (new Date(a.due_date + "T00:00:00") - new Date()) / 86400000 <= 3 && (new Date(a.due_date + "T00:00:00") - new Date()) / 86400000 >= 0;
+            const daysLeft = (new Date(a.due_date + "T00:00:00") - new Date()) / 86400000;
+            const isUrgent = !a.completed && daysLeft <= 3 && daysLeft >= 0;
+            const priColors = { "高": "#dc2626", "中": "#d97706", "低": "#16a34a" };
+            const priColor = priColors[a.priority] || "#999";
             return `
-            <div class="assignment-item ${a.completed ? 'completed' : ''} ${isUrgent ? 'urgent' : ''}">
-                <div class="assignment-check" onclick="toggleAssignment(${a.id})"></div>
+            <div class="assignment-item ${a.completed ? 'completed' : ''}">
+                <div class="assignment-priority-dot" style="background:${priColor}" title="${a.priority}优先"></div>
                 <div class="assignment-info">
                     <div class="assignment-title">${a.title}</div>
                     <div class="assignment-meta">
-                        <span class="badge badge-course" style="background:${a.course_color}">${a.course_name}</span>
-                        · ${formatDate(a.due_date)}
+                        <span class="pill" style="background:${a.course_color}">${a.course_name}</span>
                     </div>
                 </div>
-                <div class="assignment-badges">
-                    ${priorityBadge(a.priority)}
-                    <button class="btn-icon" onclick="event.stopPropagation();editAssignment(${a.id})" title="编辑">✏️</button>
-                    <button class="btn-icon btn-danger" onclick="event.stopPropagation();deleteAssignment(${a.id})" title="删除">🗑</button>
+                <span class="assignment-due ${isUrgent ? 'urgent' : ''}">${formatDate(a.due_date)}</span>
+                <div class="assignment-actions">
+                    <button class="btn-icon" onclick="event.stopPropagation();editAssignment(${a.id})" title="编辑">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                    </button>
+                    <button class="btn-icon btn-danger" onclick="event.stopPropagation();deleteAssignment(${a.id})" title="删除">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                    </button>
                 </div>
             </div>`;
         }).join("");
 
     main.innerHTML = `
+    <div class="page-header">
+        <h1 class="page-title">Assignments</h1>
+        <p class="page-subtitle">${filtered.length} 项作业</p>
+    </div>
     <div class="card">
         <div class="card-header">
-            <div class="card-title">📝 作业列表</div>
+            <div class="card-title">作业列表</div>
             <button class="btn btn-primary btn-sm" onclick="showAddAssignmentModal()">+ 添加作业</button>
         </div>
         <div class="course-tabs">
@@ -530,10 +493,14 @@ async function renderReview() {
                      onclick="cycleReviewStatus(${t.id}, '${t.status}')"
                      title="点击切换状态"></div>
                 <span class="review-task-title">${t.title}</span>
-                ${t.chapter ? `<span style="font-size:11px;color:var(--text-light)">${t.chapter}</span>` : ""}
+                ${t.chapter ? `<span style="font-size:11px;color:var(--c-muted)">${t.chapter}</span>` : ""}
                 ${statusBadge(t.status)}
-                <button class="btn-icon" onclick="event.stopPropagation();editReviewTask(${t.id})" title="编辑">✏️</button>
-                <button class="btn-icon btn-danger" onclick="event.stopPropagation();deleteReviewTask(${t.id})" title="删除">🗑</button>
+                <button class="btn-icon" onclick="event.stopPropagation();editReviewTask(${t.id})" title="编辑">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                </button>
+                <button class="btn-icon btn-danger" onclick="event.stopPropagation();deleteReviewTask(${t.id})" title="删除">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                </button>
             </div>`;
         }).join("");
 
@@ -543,7 +510,7 @@ async function renderReview() {
                 <div class="review-group-color" style="background:${group.course_color}"></div>
                 <div class="review-group-name">${group.course_name}</div>
                 <div class="review-group-stats">${done}/${total} 完成 (${pct}%)</div>
-                <button class="btn btn-xs btn-secondary" onclick="showAddReviewTaskModal(${cid})">+ 添加任务</button>
+                <button class="btn btn-ghost btn-xs" onclick="showAddReviewTaskModal(${cid})">+ 添加</button>
             </div>
             ${tasksHTML}
         </div>`;
@@ -554,12 +521,16 @@ async function renderReview() {
     }
 
     main.innerHTML = `
+    <div class="page-header">
+        <h1 class="page-title">Review plan</h1>
+        <p class="page-subtitle">${Object.keys(grouped).length} 门课程 · ${tasks.length} 个任务</p>
+    </div>
     <div class="card">
         <div class="card-header">
-            <div class="card-title">📖 复习计划</div>
+            <div class="card-title">复习计划</div>
             <div style="display:flex;gap:8px">
-                <button class="btn btn-sm btn-secondary" onclick="exportStudyPlan()">📄 Export PDF</button>
-                <button class="btn btn-primary btn-sm" onclick="showAddReviewTaskModal()">+ 添加复习任务</button>
+                <button class="btn btn-ghost btn-sm" onclick="exportStudyPlan()">Export PDF</button>
+                <button class="btn btn-primary btn-sm" onclick="showAddReviewTaskModal()">+ 添加任务</button>
             </div>
         </div>
         ${groupsHTML}
@@ -650,15 +621,15 @@ async function renderNotes() {
     }
 
     main.innerHTML = `
-    <div class="notes-layout" style="display:flex;gap:20px;height:calc(100vh - var(--topbar-h) - 80px)">
-        <div class="notes-courses-sidebar">
-            <div class="notes-courses-sidebar-header">📓 课程</div>
+    <div class="notes-layout">
+        <div class="notes-sidebar">
+            <div class="notes-sidebar-header">课程</div>
             <div class="notes-course-list">${courseListHTML}</div>
-            <div style="padding:8px;border-top:1px solid var(--border)">
-                <input type="text" placeholder="🔍 搜索笔记..."
+            <div style="padding:8px;border-top:0.5px solid var(--c-divider)">
+                <input type="text" placeholder="搜索笔记..."
                        value="${NOTES.searchQuery}"
                        onkeyup="if(event.key==='Enter')searchNotes(this.value)"
-                       style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;outline:none">
+                       style="width:100%;height:32px;padding:0 8px;border:0.5px solid var(--c-border);border-radius:6px;font-size:12px;outline:none;background:var(--c-bg)">
             </div>
         </div>
         <div class="notes-chapters-panel">
@@ -671,7 +642,7 @@ async function renderNotes() {
             <div class="add-chapter-row">
                 <input type="text" id="newChapterTitle" placeholder="新章节标题..."
                        onkeydown="if(event.key==='Enter')addNotesChapter()">
-                <button class="btn btn-sm btn-primary" onclick="addNotesChapter()">+ 添加</button>
+                <button class="btn btn-primary btn-sm" onclick="addNotesChapter()">+ 添加</button>
             </div>
         </div>
     </div>`;
@@ -766,19 +737,19 @@ async function renderChapterEditor() {
     const pdfs = await api(`/api/chapters/${chapterId}/pdfs`);
 
     main.innerHTML = `
-    <div class="notes-editor-container" style="height:calc(100vh - var(--topbar-h) - 72px);display:flex;flex-direction:column">
+    <div class="notes-editor-container">
         <div class="breadcrumb">
-            <a onclick="goBackToChapters()">📓 Notes</a>
-            <span class="sep">›</span>
+            <a onclick="goBackToChapters()">Notes</a>
+            <span class="sep">/</span>
             <span style="color:${chapterCourse ? chapterCourse.color : ''}">${chapterCourse ? chapterCourse.name : ''}</span>
-            <span class="sep">›</span>
+            <span class="sep">/</span>
             <strong>${chapterTitle}</strong>
         </div>
         <div class="notes-editor-header">
             <div class="notes-editor-title">${chapterTitle}</div>
-            <div class="auto-save-indicator" id="autoSaveIndicator">💾 已同步</div>
+            <div class="auto-save-indicator saved" id="autoSaveIndicator">已保存</div>
         </div>
-        <div class="notes-content-area" style="flex:1;min-height:0">
+        <div class="notes-content-area">
             <textarea class="notes-textarea" id="noteTextarea"
                       oninput="onNoteInput()"
                       onkeydown="handleTabKey(event)"
@@ -789,11 +760,11 @@ async function renderChapterEditor() {
              ondragover="event.preventDefault();this.classList.add('drag-over')"
              ondragleave="this.classList.remove('drag-over')"
              ondrop="handlePdfDrop(event)">
-            <div class="pdf-section-header">📎 PDF 附件</div>
-            <div class="pdf-section-hint">拖拽 PDF 到此处，或点击选择上传（≤20MB）</div>
+            <div class="pdf-section-header">PDF 附件</div>
+            <div class="pdf-section-hint">拖拽 PDF 到此处上传（≤20MB）</div>
             <input type="file" id="pdfFileInput" accept=".pdf" style="display:none"
                    onchange="handlePdfSelect(event)">
-            <button class="btn btn-sm btn-secondary" onclick="$('#pdfFileInput').click()">Upload PDF</button>
+            <button class="btn btn-ghost btn-sm" onclick="$('#pdfFileInput').click()">Upload PDF</button>
             <div class="pdf-file-list" id="pdfFileList">
                 ${pdfs.map(p => `
                 <div class="pdf-file-item">
@@ -818,7 +789,7 @@ function onNoteInput() {
     preview.innerHTML = md2html(ta.value);
     // 显示"保存中"
     const indicator = $("#autoSaveIndicator");
-    if (indicator) { indicator.textContent = "⏳ 保存中..."; indicator.className = "auto-save-indicator saving"; }
+    if (indicator) { indicator.textContent = "保存中..."; indicator.className = "auto-save-indicator saving"; }
     // 防抖 1.5s
     clearAutoSaveTimer();
     NOTES.autoSaveTimer = setTimeout(doAutoSave, 1500);
@@ -835,7 +806,7 @@ async function doAutoSave() {
         body: JSON.stringify({ content: NOTES.content }),
     });
     const indicator = $("#autoSaveIndicator");
-    if (indicator) { indicator.textContent = "💾 已保存"; indicator.className = "auto-save-indicator saved"; }
+    if (indicator) { indicator.textContent = "已保存"; indicator.className = "auto-save-indicator saved"; }
 }
 
 // Tab 键缩进
@@ -944,10 +915,10 @@ async function searchNotes(q) {
             <div class="card" style="margin-bottom:12px;cursor:pointer"
                  onclick="NOTES.searchQuery='';NOTES.activeCourseId=${n.course_id};NOTES.activeChapterId=${n.chapter_id};renderNotes()">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                    <span class="badge badge-course" style="background:${n.course_color}">${n.course_name}</span>
-                    <span style="font-size:12px;color:var(--text-muted)">${n.chapter_title}</span>
+                    <span class="pill" style="background:${n.course_color}">${n.course_name}</span>
+                    <span style="font-size:12px;color:var(--c-muted)">${n.chapter_title}</span>
                 </div>
-                <div style="font-size:13px;color:var(--text-muted)">${preview}...</div>
+                <div style="font-size:13px;color:var(--c-muted)">${preview}...</div>
             </div>`;
         }).join("");
 
@@ -955,7 +926,7 @@ async function searchNotes(q) {
     <div class="card" style="margin-bottom:16px">
         <div style="display:flex;align-items:center;gap:8px">
             <span style="font-weight:600">🔍 搜索结果: "${q}"</span>
-            <button class="btn btn-sm btn-secondary" onclick="NOTES.searchQuery='';NOTES.activeChapterId=null;renderNotes()">返回笔记</button>
+            <button class="btn btn-ghost btn-sm" onclick="NOTES.searchQuery='';NOTES.activeChapterId=null;renderNotes()">返回笔记</button>
         </div>
     </div>
     ${resultsHTML}`;
@@ -1085,7 +1056,7 @@ function showEditCourseModal(id) {
             <label class="form-label">颜色标签</label>
             <input class="form-input" type="color" id="fColor" value="${course.color}" style="height:36px;padding:4px">
         </div>
-        <button class="btn btn-danger btn-sm" onclick="deleteCourse(${id});closeModal()" style="margin-top:8px">🗑 删除此课程</button>
+        <button class="btn btn-ghost btn-sm" style="color:#dc2626;margin-top:8px" onclick="deleteCourse(${id});closeModal()">删除此课程</button>
     `, async () => {
         const name = $("#fCourseName").value.trim();
         const examDate = $("#fExamDate").value;
@@ -1281,99 +1252,6 @@ function exportStudyPlan() {
 //  Time Log 页面
 // ═══════════════════════════════════════════
 
-async function renderTimelog() {
-    const main = $("#mainContent");
-    const today = new Date().toISOString().split("T")[0];
-    const logs = await api("/api/time-logs");
-    const courseOpts = STATE.courses.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
-
-    // 计算总时长
-    const weekStart = new Date();
-    weekStart.setDate(weekStart.getDate() - weekStart.getDay()); // 本周一
-    const weekStartStr = weekStart.toISOString().split("T")[0];
-    const totalThisWeek = logs
-        .filter(l => l.date >= weekStartStr)
-        .reduce((sum, l) => sum + l.hours, 0);
-
-    // 按日期分组
-    const grouped = {};
-    for (const l of logs) {
-        if (!grouped[l.date]) grouped[l.date] = [];
-        grouped[l.date].push(l);
-    }
-    const sortedDates = Object.keys(grouped).sort().reverse();
-
-    let tableHTML = "";
-    if (sortedDates.length === 0) {
-        tableHTML = `<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted)">还没有学习记录</td></tr>`;
-    } else {
-        for (const d of sortedDates) {
-            const entries = grouped[d];
-            const dayTotal = entries.reduce((s, e) => s + e.hours, 0);
-            const dayName = ["周日","周一","周二","周三","周四","周五","周六"][new Date(d + "T00:00:00").getDay()];
-            tableHTML += `<tr style="background:#f8fafc;font-weight:600"><td colspan="5">📅 ${d} ${dayName} · ${dayTotal}h</td></tr>`;
-            for (const e of entries) {
-                tableHTML += `
-                <tr>
-                    <td></td>
-                    <td><span class="badge badge-course" style="background:${e.course_color}">${e.course_name}</span></td>
-                    <td>${e.hours}h</td>
-                    <td style="color:var(--text-muted)">${e.note || ""}</td>
-                    <td><button class="btn-icon btn-danger" onclick="deleteTimeLog(${e.id})" title="删除">🗑</button></td>
-                </tr>`;
-            }
-        }
-    }
-
-    main.innerHTML = `
-    <div class="card">
-        <div class="card-header">
-            <div class="card-title">⏱️ 学习时间记录</div>
-            <span class="time-log-total">本周合计: ${totalThisWeek.toFixed(1)}h</span>
-        </div>
-        <div class="time-log-form">
-            <div class="form-group">
-                <label class="form-label">课程</label>
-                <select class="form-select" id="tlCourseId">${courseOpts}</select>
-            </div>
-            <div class="form-group">
-                <label class="form-label">日期</label>
-                <input class="form-input" type="date" id="tlDate" value="${today}">
-            </div>
-            <div class="form-group" style="max-width:80px">
-                <label class="form-label">小时</label>
-                <input class="form-input" type="number" id="tlHours" value="1" step="0.5" min="0.5" max="12">
-            </div>
-            <div class="form-group" style="flex:1;min-width:120px">
-                <label class="form-label">备注</label>
-                <input class="form-input" id="tlNote" placeholder="学了什么...">
-            </div>
-            <button class="btn btn-primary" onclick="addTimeLogEntry()">+ 记录</button>
-        </div>
-        <table class="time-log-table">
-            <thead><tr><th style="width:20px"></th><th>课程</th><th>时长</th><th>备注</th><th style="width:40px"></th></tr></thead>
-            <tbody>${tableHTML}</tbody>
-        </table>
-    </div>`;
-}
-
-async function addTimeLogEntry() {
-    const course_id = parseInt($("#tlCourseId").value);
-    const date = $("#tlDate").value;
-    const hours = parseFloat($("#tlHours").value);
-    const note = $("#tlNote").value.trim();
-    if (!course_id || !date || !hours) { showToast("请填写完整信息", "error"); return; }
-    await api("/api/time-logs", { method: "POST", body: JSON.stringify({ course_id, date, hours, note }) });
-    showToast("时间记录已添加");
-    renderTimelog();
-}
-
-async function deleteTimeLog(id) {
-    if (!confirm("确定删除这条记录吗？")) return;
-    await api(`/api/time-logs/${id}`, { method: "DELETE" });
-    showToast("记录已删除");
-    renderTimelog();
-}
 
 // ═══════════════════════════════════════════
 //  计时器 + 背景音乐
@@ -1433,8 +1311,11 @@ async function renderTimer() {
     // 设置面板
     const courseOptsHTML = courses.map(c => `<option value="${c.id}" ${TIMER.courseId === c.id ? 'selected' : ''}>${c.name}</option>`).join("");
     main.innerHTML = `
+    <div class="page-header">
+        <h1 class="page-title">Timer</h1>
+        <p class="page-subtitle">专注计时学习</p>
+    </div>
     <div class="card">
-        <div class="card-header"><div class="card-title">⏱️ 学习计时器</div></div>
         <div class="timer-setup">
             <div class="form-group">
                 <label class="form-label">科目</label>
@@ -1447,7 +1328,7 @@ async function renderTimer() {
                     <button class="timer-duration-btn" data-min="45">45 分钟</button>
                     <button class="timer-duration-btn active" data-min="60">60 分钟</button>
                     <button class="timer-duration-btn" data-min="90">90 分钟</button>
-                    <input class="form-input" type="number" id="timerCustomMin" placeholder="自定义分钟" min="1" max="240" style="width:120px;margin-left:8px">
+                    <input class="form-input" type="number" id="timerCustomMin" placeholder="自定义分钟" min="1" max="240" style="width:120px;height:36px">
                 </div>
             </div>
             <div class="form-group">
@@ -1456,13 +1337,13 @@ async function renderTimer() {
             </div>
             <div class="timer-music-section">
                 <div class="music-upload-area" id="musicUploadArea"
-                     ondragover="event.preventDefault();this.style.borderColor='var(--primary)'"
+                     ondragover="event.preventDefault();this.style.borderColor='var(--c-muted)'"
                      ondragleave="this.style.borderColor=''"
                      ondrop="handleMusicDrop(event)">
-                    📁 拖拽音频到此处，或
+                    拖拽音频文件到此处上传 (mp3/wav/ogg)
                     <input type="file" id="musicFileInput" accept=".mp3,.wav,.ogg" style="display:none"
                            onchange="handleMusicSelect(event)">
-                    <button class="btn btn-sm btn-secondary" onclick="$('#musicFileInput').click()" style="margin-left:6px">上传</button>
+                    <button class="btn btn-ghost btn-sm" onclick="$('#musicFileInput').click()" style="margin-left:6px">选择文件</button>
                 </div>
             </div>
             <div class="music-track-list" id="musicTrackList">
@@ -1471,17 +1352,25 @@ async function renderTimer() {
                     <span>🎵</span>
                     <span class="track-name">${t.filename}</span>
                     <span class="track-duration">${t.duration_sec ? Math.floor(t.duration_sec/60)+':'+String(t.duration_sec%60).padStart(2,'0') : '?'}</span>
-                    <button class="btn-icon btn-danger" onclick="deleteMusicTrack(${t.id})">🗑</button>
+                    <button class="btn-icon btn-danger" onclick="deleteMusicTrack(${t.id})">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                    </button>
                 </div>`).join("")}
             </div>
             <div class="form-group">
                 <label class="form-label">备注（选填）</label>
                 <input class="form-input" id="timerNote" placeholder="学习内容...">
             </div>
-            <button class="btn btn-primary" style="padding:12px 32px;font-size:15px;align-self:flex-start"
-                    onclick="startTimer()">▶ 开始学习</button>
+            <button class="btn btn-primary" style="height:40px;padding:0 32px;font-size:15px"
+                    onclick="startTimer()">开始学习</button>
         </div>
+    </div>
+    <div class="timer-stats" id="timerStatsContainer">
+        <div class="timer-stats-grid"></div>
     </div>`;
+
+    // 加载统计图表
+    setTimeout(() => renderTimerStats(), 200);
 
     // 绑定时长按钮事件
     $$("#timerDurationBtns .timer-duration-btn").forEach(btn => {
@@ -1602,12 +1491,12 @@ function renderTimerActive() {
         <div class="timer-course-name">${course ? course.name : ''}</div>
         ${musicHTML}
         <div class="timer-actions">
-            <button class="btn" style="background:rgba(255,255,255,.15);color:#fff"
+            <button class="btn btn-ghost" style="color:#fff;border-color:rgba(255,255,255,.2)"
                     onclick="${TIMER.state === 'paused' ? 'resumeTimer()' : 'pauseTimer()'}">
-                ${TIMER.state === 'paused' ? '▶ 继续' : '⏸ 暂停'}
+                ${TIMER.state === 'paused' ? '继续' : '暂停'}
             </button>
-            <button class="btn" style="background:rgba(239,68,68,.3);color:#fca5a5"
-                    onclick="abandonTimer()">放弃（不记录）</button>
+            <button class="btn btn-ghost" style="color:rgba(255,255,255,.5);border-color:rgba(255,255,255,.1)"
+                    onclick="abandonTimer()">放弃</button>
         </div>
     </div>`;
 }
@@ -1654,8 +1543,8 @@ async function timerComplete() {
     TIMER.state = "done";
     stopMusic();
 
-    // 写入 time_log
-    const hours = Math.round(TIMER.totalSeconds / 36) / 100; // 精确到 0.01
+    // 写入 time_log（时长换算为小时，保留 2 位小数）
+    const hours = Math.round(TIMER.totalSeconds / 36) / 100;
     const today = new Date().toISOString().split("T")[0];
     try {
         await api("/api/time-logs", {
@@ -1664,7 +1553,7 @@ async function timerComplete() {
                 course_id: TIMER.courseId,
                 date: today,
                 hours: hours,
-                note: TIMER.note || `计时器: ${TIMER.totalSeconds / 60}分钟`,
+                note: TIMER.note || "",
             }),
         });
     } catch (e) { /* 记录失败不阻塞 */ }
@@ -1689,14 +1578,17 @@ function renderTimerDone() {
         <div class="timer-complete-icon">✅</div>
         <div class="timer-complete-text">专注完成！</div>
         <div class="timer-complete-sub">
-            ${course ? course.name : ''} · ${TIMER.totalSeconds / 60} 分钟
+            ${course ? course.name : ''} · ${TIMER.totalSeconds / 60} 分钟 · 已自动记录
         </div>
         <div class="timer-complete-actions">
-            <button class="btn btn-primary" onclick="showTimerStats()">📊 查看统计</button>
-            <button class="btn btn-secondary" onclick="resetTimer()">🔄 再来一次</button>
+            <button class="btn btn-primary" onclick="resetTimer()">再来一次</button>
         </div>
-        <div class="timer-stats" id="timerStatsContainer"></div>
+        <div class="timer-stats" id="timerStatsContainer">
+            <div class="timer-stats-grid"></div>
+        </div>
     </div>`;
+
+    setTimeout(() => renderTimerStats(), 200);
 }
 
 async function showTimerStats() {
@@ -1726,7 +1618,6 @@ function abandonTimer() {
 async function renderTimerStats() {
     const container = $("#timerStatsContainer");
     if (!container) {
-        // 创建容器
         const main = $("#mainContent");
         const div = document.createElement("div");
         div.className = "timer-stats";
@@ -1737,13 +1628,15 @@ async function renderTimerStats() {
     const grid = document.querySelector("#timerStatsContainer .timer-stats-grid");
     if (!grid) return;
 
-    const stats = await api("/api/time-logs/stats");
-    if (!stats) return;
-
     // 销毁旧图表
     for (const key of Object.keys(TIMER.charts)) {
         if (TIMER.charts[key]) { TIMER.charts[key].destroy(); TIMER.charts[key] = null; }
     }
+    // 清空旧卡片
+    grid.innerHTML = "";
+
+    const stats = await api("/api/time-logs/stats");
+    if (!stats) return;
 
     // 1. 今日各科横条图
     if (stats.today && stats.today.length > 0) {
@@ -1841,6 +1734,10 @@ async function renderTimerStats() {
                 });
             }
         }, 100);
+    }
+
+    if (!grid.innerHTML.trim()) {
+        grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-state-icon">📊</div><div class="empty-state-text">还没有学习数据，完成一次计时后这里会显示统计图表</div></div>`;
     }
 }
 
@@ -2135,9 +2032,6 @@ window.editReviewTask = editReviewTask;
 window.closeModal = closeModal;
 window.submitModal = submitModal;
 window.exportStudyPlan = exportStudyPlan;
-window.renderTimelog = renderTimelog;
-window.addTimeLogEntry = addTimeLogEntry;
-window.deleteTimeLog = deleteTimeLog;
 window.toggleChat = toggleChat;
 window.handleChatKey = handleChatKey;
 window.sendChatMessage = sendChatMessage;
@@ -2160,7 +2054,7 @@ window.openQuickTimer = openQuickTimer;
 window.closeQuickTimer = closeQuickTimer;
 window.setQuickDuration = setQuickDuration;
 window.startQuickTimer = startQuickTimer;
-window.renderTimelog = renderTimelog;
+
 
 // ═══════════════════════════════════════════
 //  启动
@@ -2175,10 +2069,10 @@ document.addEventListener("keydown", (e) => {
     if (e.ctrlKey || e.metaKey) {
         switch (e.key) {
             case "1": e.preventDefault(); switchTab("dashboard"); break;
-            case "2": e.preventDefault(); switchTab("assignments"); break;
-            case "3": e.preventDefault(); switchTab("review"); break;
-            case "4": e.preventDefault(); switchTab("notes"); break;
-            case "5": e.preventDefault(); switchTab("timelog"); break;
+            case "2": e.preventDefault(); switchTab("courses"); break;
+            case "3": e.preventDefault(); switchTab("assignments"); break;
+            case "4": e.preventDefault(); switchTab("review"); break;
+            case "5": e.preventDefault(); switchTab("notes"); break;
             case "6": e.preventDefault(); switchTab("timer"); break;
         }
     }
